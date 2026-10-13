@@ -1,7 +1,7 @@
 {
   "name": "title-refs",
-  "version": "0.1.0",
-  "description": "Tags the session title with the PR you opened and the Linear issue you're on, like <#123> or <MET-93>, so the sidebar shows what each session is about.",
+  "version": "0.2.0",
+  "description": "Offers to tag the session title with the PR you open and the Linear issue you're on, like <#123> or <MET-93>, asking before each change.",
   "author": {
     "name": "Avishalom Shalit",
     "url": "https://github.com/avishalom"

@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 const SERVER = 'ccd_session_mgmt'
 const MAX_TAGS = 4
 
-export type Refs = { prs: number[]; issues: string[] }
+export type Refs = { prs: number[]; issues: string[]; declined?: string[] }
 
 const EMPTY: Refs = { prs: [], issues: [] }
 
@@ -12,12 +12,14 @@ const NOT_ISSUES = new Set([
   'UTF', 'ISO', 'SHA', 'MD', 'RFC', 'CVE', 'HTTP', 'TLS', 'SSL', 'ES', 'GPT', 'PEP',
   'FIX', 'BUG', 'HOTFIX', 'FEAT', 'FEATURE', 'RELEASE', 'V', 'TASK', 'WIP', 'PR', 'X',
   'IPV', 'H', 'COVID', 'MP', 'AES', 'RSA', 'ECMA', 'ANSI', 'WCAG', 'CSS', 'HTML', 'TOP',
+  'STEP', 'PHASE', 'PART', 'ROUND', 'PAGE', 'LINE', 'ITEM', 'DAY', 'WEEK', 'SPRINT', 'TEST',
 ])
 
 const ISSUE = /(?<![A-Za-z0-9])([A-Za-z]{2,6})-(\d{1,6})(?![A-Za-z0-9])/g
 const UPPER_ISSUE = /(?<![A-Za-z0-9])([A-Z]{2,6})-(\d{1,6})(?![A-Za-z0-9])/g
 const PULL = /github\.com\/[\w.-]+\/[\w.-]+\/pull\/(\d+)/g
-const TAG = /\s*<(?:#\d+|[A-Z]{2,6}-\d+)>/g
+// The app may hand titles back with < and > escaped, so match both spellings.
+const TAG = /\s*(?:<|&lt;)(?:#\d+|[A-Z]{2,6}-\d+)(?:>|&gt;)/g
 
 const teamsFrom = (raw: unknown): Set<string> | null => {
   const keys = String(raw ?? '')
@@ -51,14 +53,18 @@ export const findPulls = (text: string): number[] => {
 // "<base> <MET-93> <#123>": the base with any old tags removed, then the tags.
 export const titled = (title: string, refs: Refs): string => {
   const base = title.replace(TAG, '').trimEnd()
-  const tags = [...refs.issues, ...refs.prs.map(n => `#${n}`)].slice(-MAX_TAGS)
+  const inBase = (id: string) => new RegExp(`(?<![A-Za-z0-9])${id}(?![0-9])`, 'i').test(base)
+  const tags = [...refs.issues.filter(i => !inBase(i)), ...refs.prs.map(n => `#${n}`)].slice(-MAX_TAGS)
   return tags.length ? `${base} ${tags.map(t => `<${t}>`).join(' ')}` : base
 }
 
 const merge = (refs: Refs, add: Partial<Refs>): Refs => ({
+  ...refs,
   prs: [...refs.prs, ...(add.prs ?? []).filter(n => !refs.prs.includes(n))],
   issues: [...refs.issues, ...(add.issues ?? []).filter(i => !refs.issues.includes(i))],
 })
+
+const label = (tag: string) => `<${tag}>`
 
 const key = async ($: EngineInterface) => `refs:${await $.session.id()}`
 
@@ -66,7 +72,7 @@ const load = async ($: EngineInterface): Promise<Refs> =>
   ((await $.store.get(await key($))) as Refs | undefined) ?? EMPTY
 
 const save = async ($: EngineInterface, refs: Refs) => {
-  if (refs.prs.length || refs.issues.length) await $.store.set(await key($), refs)
+  if (refs.prs.length || refs.issues.length || refs.declined?.length) await $.store.set(await key($), refs)
   else await $.store.delete(await key($))
 }
 
@@ -89,12 +95,37 @@ const sync = async ($: EngineInterface): Promise<string> => {
   }
 }
 
-const add = async ($: EngineInterface, found: Partial<Refs>) => {
-  if (!found.prs?.length && !found.issues?.length) return
-  const before = await load($)
-  const after = merge(before, found)
-  if (after.prs.length === before.prs.length && after.issues.length === before.issues.length) return
-  await save($, after)
+// Refs spotted during a turn, asked about once the turn ends.
+let spotted: Partial<Refs> = {}
+
+const spot = (found: Partial<Refs>) => {
+  spotted = merge({ prs: spotted.prs ?? [], issues: spotted.issues ?? [] }, found)
+}
+
+// Asks once for every new ref, then tags the title with the ones approved.
+const offer = async ($: EngineInterface, found: Partial<Refs>) => {
+  const refs = await load($)
+  const declined = refs.declined ?? []
+  const fresh = [
+    ...(found.issues ?? []).filter(i => !refs.issues.includes(i) && !declined.includes(i)),
+    ...(found.prs ?? []).map(n => `#${n}`).filter(t => !refs.prs.includes(Number(t.slice(1))) && !declined.includes(t)),
+  ]
+  if (!fresh.length) {
+    await sync($)
+    return
+  }
+  const tags = fresh.map(label).join(' ')
+  let answer = 'Skip'
+  try {
+    answer = await $.ui.ask(`Tag this session's title with ${tags}?`, { options: ['Add tag', 'Skip'], header: 'Title tag' })
+  } catch {
+    return // dismissed, or nobody to ask: ask again next time
+  }
+  const isYes = answer === 'Add tag'
+  const prs = fresh.filter(t => t.startsWith('#')).map(t => Number(t.slice(1)))
+  const issues = fresh.filter(t => !t.startsWith('#'))
+  const next = isYes ? merge(refs, { prs, issues }) : { ...refs, declined: [...declined, ...fresh] }
+  await save($, next)
   await sync($)
 }
 
@@ -134,7 +165,7 @@ export const register: Register = (on, options) => {
 
   on('prompt.submit', async ($, e, next) => {
     const ran = await next(e)
-    await quietly(() => add($, { issues: findIssues(e.text, teams) }))
+    spot({ issues: findIssues(e.text, teams) })
     return ran
   })
 
@@ -145,11 +176,11 @@ export const register: Register = (on, options) => {
     const { tool: _tool, tool_use_id: _id, consent: _consent, ...args } = e as Record<string, unknown>
     const input = JSON.stringify(args)
     const output = ran.text ?? ''
-    const isPrCreate =
+    const isPrStart =
       (e.tool === 'Bash' && /\bgh\s+pr\s+create\b/.test(input)) ||
       /create_pull_request|bind_pr/i.test(e.tool)
-    if (isPrCreate && !ran.isError) await quietly(() => add($, { prs: findPulls(`${input}\n${output}`) }))
-    if (/linear/i.test(e.tool)) await quietly(() => add($, { issues: findIssues(input, teams) }))
+    if (isPrStart && !ran.isError) spot({ prs: findPulls(`${input}\n${output}`) })
+    if (/linear/i.test(e.tool)) spot({ issues: findIssues(input, teams) })
     return ran
   })
 
@@ -161,11 +192,14 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.complete', async ($, e, next) => {
-    await quietly(async () => {
-      const issues = await branchIssues($, teams)
-      if (issues.length) await add($, { issues })
-      else await sync($)
-    })
+    if (e.agentId === undefined) {
+      const found = spotted
+      spotted = {}
+      await quietly(async () => {
+        const issues = await branchIssues($, teams)
+        await offer($, merge({ prs: found.prs ?? [], issues: found.issues ?? [] }, { issues }))
+      })
+    }
     return next(e)
   })
 
@@ -184,12 +218,17 @@ export const register: Register = (on, options) => {
     const pr = /^#?(\d+)$/.exec(arg)
     const issue = findIssues(arg.toUpperCase(), null)[0] ?? (/^[A-Z]{2,6}-\d+$/i.test(arg) ? arg.toUpperCase() : null)
     if (verb === 'add' && (pr || issue)) {
-      const next = merge(refs, pr ? { prs: [Number(pr[1])] } : { issues: [issue as string] })
+      const tag = pr ? `#${pr[1]}` : (issue as string)
+      const next = {
+        ...merge(refs, pr ? { prs: [Number(pr[1])] } : { issues: [issue as string] }),
+        declined: (refs.declined ?? []).filter(d => d !== tag),
+      }
       await save($, next)
       return { text: `Tags: ${show(next)}; ${await sync($)}.` }
     }
     if (verb === 'remove' && (pr || issue)) {
       const next: Refs = {
+        ...refs,
         prs: refs.prs.filter(n => !pr || n !== Number(pr[1])),
         issues: refs.issues.filter(i => !issue || i !== issue),
       }

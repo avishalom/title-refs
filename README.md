@@ -10,10 +10,14 @@ Fix login redirect <MET-93> <#123>
 ## What gets tagged
 
 - **A PR you open:** `gh pr create`, the GitHub tools' create-pull-request
-  call, or the app's bind-PR call adds `<#123>`.
+  call, or the app's bind-PR call offers `<#123>`.
 - **A Linear issue you're on:** the key in your git branch name
   (`you/met-93-fix-login`), in a Linear tool call, or in your prompt
-  (`work on MET-93`) adds `<MET-93>`.
+  (`work on MET-93`) offers `<MET-93>`.
+
+At the end of the turn it asks once, in Claude's question dialog: "Tag this
+session's title with <MET-93>?" Pick **Add tag** or **Skip**. A skipped tag is
+not offered again in that session; `/refs add` still adds it by hand.
 
 Look-alikes such as `UTF-8`, `ISO-9001` or `fix-12` are skipped. To tag only
 your own teams, set **Linear team keys** (for example `MET,ENG`) in the
