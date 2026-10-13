@@ -1,0 +1,6 @@
+{
+  "name": "title-refs",
+  "description": "Tag a Claude Code session's title with its PR and Linear issue",
+  "owner": { "name": "Avishalom Shalit" },
+  "plugins": [{ "name": "title-refs", "source": "./" }]
+}

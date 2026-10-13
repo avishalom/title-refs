@@ -1,0 +1,19 @@
+{
+  "name": "title-refs",
+  "version": "0.1.0",
+  "description": "Tags the session title with the PR you opened and the Linear issue you're on, like <#123> or <MET-93>, so the sidebar shows what each session is about.",
+  "author": {
+    "name": "Avishalom Shalit",
+    "url": "https://github.com/avishalom"
+  },
+  "userConfig": {
+    "linearTeams": {
+      "type": "string",
+      "title": "Linear team keys",
+      "description": "Comma-separated team keys to tag, like MET,ENG. Empty tags any KEY-123 that looks like an issue.",
+      "default": ""
+    }
+  },
+  "homepage": "https://github.com/avishalom/title-refs",
+  "repository": "https://github.com/avishalom/title-refs"
+}
