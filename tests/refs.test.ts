@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { findIssues, findPulls, titled } from '../hooks/register'
+import { findIssues, findPulls, runsPrCreate, titled } from '../hooks/register'
 
 const app = (on: On, start: string) => {
   const titles: string[] = [start]
@@ -31,6 +31,14 @@ describe('finding refs', () => {
     expect(findIssues('fix-12-typo', null, true)).toEqual([])
     expect(findIssues('do STEP-10 next', null)).toEqual([])
     expect(findIssues('ENG-4 and MET-9', new Set(['MET']))).toEqual(['MET-9'])
+  })
+
+  test('only commands that run gh pr create count', () => {
+    expect(runsPrCreate('gh pr create --fill')).toBe(true)
+    expect(runsPrCreate('cd ~/repo && gh pr create --title x')).toBe(true)
+    expect(runsPrCreate("python3 - <<'EOF'\nprint('gh pr create')\nEOF")).toBe(false)
+    expect(runsPrCreate('grep -n "gh pr create" tests/refs.test.ts')).toBe(false)
+    expect(runsPrCreate('echo done; gh pr create')).toBe(false)
   })
 
   test('PR numbers from gh output', () => {
@@ -104,6 +112,14 @@ describe('tagging the title', () => {
     await endTurn($)
     expect(asked).toEqual(["Tag this session's title with <MET-94> <MET-93>?"])
     expect(titles.at(-1)).toBe('Fix login <MET-94> <MET-93>')
+  })
+
+  test('a command that only mentions gh pr create is not offered', async ($, on) => {
+    const { titles, asked } = engine(on, 'Fix login', 'Add tag')
+    await $.tool.call({ tool: 'Bash', command: "cat > t.ts <<'EOF'\n// gh pr create -> pull/123\nEOF" } as never)
+    await endTurn($)
+    expect(asked).toEqual([])
+    expect(titles).toEqual(['Fix login'])
   })
 
   test('other gh commands with PR links are not offered', async ($, on) => {

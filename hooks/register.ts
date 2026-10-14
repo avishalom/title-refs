@@ -41,6 +41,11 @@ export const findIssues = (text: string, teams: Set<string> | null, anyCase = fa
   return found
 }
 
+// True only when the command itself runs `gh pr create`, alone or after simple
+// `cd …` / `export …` steps, not when it merely mentions it (a heredoc, a grep).
+export const runsPrCreate = (command: string): boolean =>
+  /^\s*(?:(?:cd|export)\s+[^;&|\n]+?\s*&&\s*)*gh\s+pr\s+create\b/.test(command)
+
 export const findPulls = (text: string): number[] => {
   const found: number[] = []
   for (const m of text.matchAll(PULL)) {
@@ -176,10 +181,15 @@ export const register: Register = (on, options) => {
     const { tool: _tool, tool_use_id: _id, consent: _consent, ...args } = e as Record<string, unknown>
     const input = JSON.stringify(args)
     const output = ran.text ?? ''
-    const isPrStart =
-      (e.tool === 'Bash' && /\bgh\s+pr\s+create\b/.test(input)) ||
-      /create_pull_request|bind_pr/i.test(e.tool)
-    if (isPrStart && !ran.isError) spot({ prs: findPulls(`${input}\n${output}`) })
+    if (!ran.isError) {
+      if (e.tool === 'Bash' && runsPrCreate(String(args.command ?? ''))) {
+        // gh prints the new PR's URL; take the last one it printed, never the command's text.
+        const pr = findPulls(output).at(-1)
+        if (pr !== undefined) spot({ prs: [pr] })
+      } else if (/create_pull_request|bind_pr/i.test(e.tool)) {
+        spot({ prs: findPulls(`${input}\n${output}`).slice(-1) })
+      }
+    }
     if (/linear/i.test(e.tool)) spot({ issues: findIssues(input, teams) })
     return ran
   })
